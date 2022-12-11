@@ -1,78 +1,72 @@
-<h1 align="center">
-    <img src="https://avatars.githubusercontent.com/u/114239186?s=100&v=4" alt="palera1n logo">
-    <p>palera1n</p>
-</h1>
-<h3 align="center">An iOS 15.0-15.7.1 work-in-progress, (semi-)tethered checkm8 jailbreak.</h3>
-<p align="center">
-    <strong><a href="CHANGELOG.md">Change Log</a></strong>
-    •
-    <strong><a href="https://dsc.gg/palera1n">Discord</a></strong>
-    •
-    <strong><a href="https://twitter.com/palera1n">Twitter</a></strong>
-</p>
+# Palera1n mod by kitty915
 
-# How does it work?
-It boots the device with multiple patches required. On first run, it'll boot a ramdisk which dumps your onboard blob, creates a fakefs (if using semi tethered), installs the loader app, and patches your kernel.
+> **Warning** PLEASE, DO NOT ASK FOR SUPPORT REGARDING ICLOUD BYPASS IN PALERA1N DISCORD SERVER! THIS IS NOT OFFICIALLY SUPPORTED AND WON'T EVER BE.
 
-# Issues
-### Need help?
-If you need help, **please** join our Discord. We disabled issues due to the flood of spam, and difficulty to respond in general. We are much more comfortable on Discord.
+This palera1n mod adds a tethered iCloud Hello screen bypass for checkm8 devices, tested on an iPhone 6S.
 
-Please, please, please, provide necessary info:
+The script works on macOS and Linux. Windows is NOT supported. VMs are NOT supported unless PCI USB Passthrough is used. LiveCD Linux can be used if you have enough RAM.
 
-- iOS version and device (eg. iPhone 7+ 15.1, iPhone 6s 15.3.1)
-- Computer's OS and version (eg. Ubuntu 22.04, macOS 13.0)
-- The command you ran
-- **Full log from the logs folder**
+Only tested on tethered palera1n jailbreak, semi-tethered may need different mount directories but I don't have a compatible device to test.
 
-**DO NOT** harass tweak devs if tweaks don't work. Refer to [here](https://github.com/itsnebulalol/ios15-tweaks) for compatiblity.
+This bypass will also jailbreak with palera1n, we do this to disable rootfs seal enforcement. This could be done without palera1n patching the kernel but I am too lazy to do that, and I want a JB anyways.
 
-You may join [here](https://dsc.gg/palera1n).
+iOS 16 support may be a thing when palera1n's iOS 16 branch gets somewhat stable, but I don't have a device to test
 
-# Patreons
+# DISCLAIMER
 
-Thank you so much to our Patreons that make the future development possible! You may sub [here](https://patreon.com/palera1n), if you'd like to.
+This bypass must not be used on a device you don't legally own and have permission to modify, I am not responsible for any misuse of anyting in this repo.
 
-<a href="https://github.com/samh06"><img width=64 src="https://user-images.githubusercontent.com/18669106/206333607-881d7ca1-f3bf-4e18-b620-25de0c527315.png"></img></a>
-<a href="https://havoc.app"><img width=64 src="https://docs.havoc.app/img/standard_icon.png"></img></a>
-<a href="https://twitter.com/yyyyyy_public"><img width=64 src="https://pbs.twimg.com/profile_images/1429332550112079876/dQQgsURc_400x400.jpg"></img></a>
+# Usage
+To bypass Hello screen we will first of all, restore to a clean iOS 15.x version. (15.0-15.7.1)
 
-# Warning
-- We are **NOT** responsible for any data loss. The user of this program accepts responsibility should something happen to their device. While nothing should happen, jailbreaking has risks in itself. **If your device is stuck in recovery, please run one of the following:**
-   - futurerestore --exit-recovery
-   - irecovery -n
+You should be in the Hello screen for the version you restored, now reboot into DFU mode.
 
-# Prerequisites
-#### Warning: You must install the Tips app from the App Store before running palera1n.
-- A checkm8 vulnerable iOS device on iOS 15 (A8-A11)
-  - The device must be on iOS 15.0-15.7.1
-- Linux or macOS computer
-  - Python 3 must be installed.
+Now in your PC, clone this git repo (recursively) and cd into it
+```
+git clone https://github.com/kitty915/palera1n-mod/ && cd ./palera1n-mod/
+```
 
-### A10 and A11 devices
-- On A10 and A11, **you must disable your passcode while in the jailbroken state**.
-  - On A10, this can be fixed in the future by implementing blackbird.
-  - On A11, we don't have a SEP exploit yet.
+Make sure you have all palera1n dependencies installed, then we can start with the jailbreak and bypass process.
 
-# How to use?
+> If you are in linux you may need to run the following commands in a new terminal (and leave it open) before running palera1n:
+>
+> ``sudo systemctl stop usbmuxd && sudo usbmuxd -p -f``
 
-A tutorial can be found [here](https://ios.cfw.guide/installing-palera1n).
+We will jailbreak with palera1n first to prepare all files:
+```
+./palera1n.sh --tweaks <iOS version> --verbose
+```
+>You will need to replace "<iOS version>" with the iOS version currently installed in your device. For example:
+>
+>``./palera1n.sh --tweaks 15.7.1 --verbose``
 
-# Repos
+Let the script run and follow any screen prompt if any. When it finishes you should be booted into iOS again. If for some reason you end up in recovery mode, try running the command again and it should boot you into iOS.
 
-### Tweaks mode
-All repos work when using tweaks mode because it uses normal Procursus and not rootless.
+If everything was succesful and you booted into iOS, reboot to DFU again, we are going to start the bypass process.
 
-### Rootless 
-Repos need to be updated for rootless, here are some that work currently:
+Type the following command in the terminal:
+```
+./palera1n.sh --bypass <iOS version>
+```
+> Again, changing "<iOS version>" with your iOS version.
 
-- [Mineek's repo](https://mineek.github.io/repo) contains rootless Procursus packages
-- The official [palera1n repo](https://repo.palera.in) contains miscellaneous packages
+Let the process finish and your device should be in recovery mode
 
-If you want to make a rootless repo, use the official [palera1n repo](https://github.com/palera1n/repo) for reference. Every deb should use the `iphoneos-arm64` architecture, and *nothing* should be on the rootfs. Everything should be in /var/jb.
+Once in recovery mode, we are already done with the bypass, just run the same palera1n command from before to boot.
+```
+./palera1n.sh --tweaks <iOS version> --verbose
+```
+> **Warning** You will have to run this command every time you want to boot your device!
+>
+> Remember to change "<iOS version>" with your iOS version too.
+
+Now, proceed with setup as normal, you can skip Wi-Fi setup and won't be asked to activate your device.
+
+You can now jailbreak with palera1n too with the Tips app, enjoy!
 
 # Credits
 
+Original palera1n credits:
 - [Nathan](https://github.com/verygenericname)
     - The ramdisk that dumps blobs, installs pogo to tips app, and duplicates rootfs is a slimmed down version of [SSHRD_Script](https://github.com/verygenericname/SSHRD_Script)
     - For modified [restored_external](https://github.com/verygenericname/sshrd_SSHRD_Script)
@@ -99,3 +93,8 @@ If you want to make a rootless repo, use the official [palera1n repo](https://gi
 - [Nick Chan](https://github.com/asdfugil) general help with patches.
 - [Sam Bingner](https://github.com/sbingner) for [Substitute](https://github.com/sbingner/substitute)
 - [Serena](https://github.com/SerenaKit) for helping with boot ramdisk.
+
+Mod credits:
+- @MatthewPierson: Patched mobileactivationd
+- @edwin170: Some code inspired from [dualboot-ios-15-with-14-script](https://github.com/edwin170/dualboot-ios-15-with-14-script/)'s repo
+- @kitty915: Modified palera1n script to automate bypass and added instructions in the readme
