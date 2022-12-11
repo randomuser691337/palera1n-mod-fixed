@@ -582,17 +582,6 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
 
     remote_cmd "/usr/bin/mount_filesystems"
 
-    if [ "$bypass" = "1" ]; then
-        echo "[*] Starting bypass process..."
-        remote_cmd "mv -v /mnt1/usr/libexec/mobileactivationd /mnt1/usr/libexec/mobileactivationdBackup"
-        remote_cmd "ldid -e /mnt1/usr/libexec/mobileactivationdBackup > /mnt1/usr/libexec/mob.plist"
-        remote_cp other/mobileactivationd root@localhost:/mnt1/usr/libexec/
-        remote_cmd "ldid -S/mnt1/usr/libexec/mob.plist /mnt1/usr/libexec/mobileactivationd"
-        remote_cmd "rm -v /mnt1/usr/libexec/mob.plist"
-        remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
-        echo "[*] Bypass done!"
-    fi
-
     has_active=$(remote_cmd "ls /mnt6/active" 2> /dev/null)
     if [ ! "$has_active" = "/mnt6/active" ]; then
         echo "[!] Active file does not exist! Please use SSH to create it"
