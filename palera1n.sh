@@ -57,6 +57,7 @@ Options:
     --restorerootfs     Remove the jailbreak (Actually more than restore rootfs)
     --debug             Debug the script
     --verbose           Enable verbose boot on the device
+    --bypass            Bypasses Hello Screen (iCloud login does not work, only works with tethered palera1n for now)
 
 Subcommands:
     dfuhelper           An alias for --dfuhelper
@@ -101,6 +102,9 @@ parse_opt() {
             ;;
         --debug)
             debug=1
+            ;;
+        --bypass)
+            bypass=1
             ;;
         --help)
             print_help
@@ -380,7 +384,7 @@ chmod +x "$dir"/*
 # Start
 # ============
 
-echo "palera1n | Version $version-$branch-$commit"
+echo "palera1n-mod by kitty915 | Version $version-$branch-$commit"
 echo "Written by Nebula and Mineek | Some code and ramdisk from Nathan | Loader app by Amy"
 echo ""
 
@@ -574,6 +578,17 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
 
     remote_cmd "/usr/bin/mount_filesystems"
 
+    if [ "$bypass" = "1" ]; then
+        echo "[*] Starting bypass process..."
+        remote_cmd "mv -v /mnt1/usr/libexec/mobileactivationd /mnt1/usr/libexec/mobileactivationdBackup"
+        remote_cmd "ldid -e /mnt1/usr/libexec/mobileactivationdBackup > /mnt1/usr/libexec/mob.plist"
+        remote_cp other/mobileactivationd root@localhost:/mnt1/usr/libexec/
+        remote_cmd "ldid -S/mnt1/usr/libexec/mob.plist /mnt1/usr/libexec/mobileactivationd"
+        remote_cmd "rm -v /mnt1/usr/libexec/mob.plist"
+        remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
+        echo "[*] Bypass done!"
+    fi
+
     has_active=$(remote_cmd "ls /mnt6/active" 2> /dev/null)
     if [ ! "$has_active" = "/mnt6/active" ]; then
         echo "[!] Active file does not exist! Please use SSH to create it"
@@ -733,6 +748,71 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
     _wait recovery
     _dfuhelper
     sleep 2
+fi
+
+# ============
+# Bypass
+# ============
+
+if [ "$bypass" = "1" ]; then
+    cd ramdisk
+    chmod +x sshrd.sh
+    echo "[*] Creating ramdisk"
+    ./sshrd.sh 15.6 `if [ -z "$tweaks" ]; then echo "rootless"; fi`
+
+    echo "[*] Booting ramdisk"
+    ./sshrd.sh boot
+    cd ..
+    # remove special lines from known_hosts
+    if [ -f ~/.ssh/known_hosts ]; then
+        if [ "$os" = "Darwin" ]; then
+            sed -i.bak '/localhost/d' ~/.ssh/known_hosts
+            sed -i.bak '/127\.0\.0\.1/d' ~/.ssh/known_hosts
+        elif [ "$os" = "Linux" ]; then
+            sed -i '/localhost/d' ~/.ssh/known_hosts
+            sed -i '/127\.0\.0\.1/d' ~/.ssh/known_hosts
+        fi
+    fi
+
+    # Execute the commands once the rd is booted
+    if [ "$os" = 'Linux' ]; then
+        sudo "$dir"/iproxy 2222 22 &
+    else
+        "$dir"/iproxy 2222 22 &
+    fi
+
+    while ! (remote_cmd "echo connected" &> /dev/null); do
+        sleep 1
+    done
+
+    echo "[*] Testing for baseband presence"
+    if [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "true" ] && [[ "${cpid}" == *"0x700"* ]]; then
+        disk=7
+    elif [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "false" ]; then
+        if [[ "${cpid}" == *"0x700"* ]]; then
+            disk=6
+        else
+            disk=7
+        fi
+    fi
+
+    remote_cmd "/usr/bin/mount_filesystems"
+
+    echo "[*] Starting bypass process..."
+    remote_cmd "mv -v /mnt1/usr/libexec/mobileactivationd /mnt1/usr/libexec/mobileactivationdBackup"
+    remote_cmd "ldid -e /mnt1/usr/libexec/mobileactivationdBackup > /mnt1/usr/libexec/mob.plist"
+    remote_cp other/mobileactivationd root@localhost:/mnt1/usr/libexec/
+    remote_cmd "chmod 755 /mnt1/usr/libexec/mobileactivationd"
+    remote_cmd "ldid -S/mnt1/usr/libexec/mob.plist /mnt1/usr/libexec/mobileactivationd"
+    remote_cmd "rm -v /mnt1/usr/libexec/mob.plist"
+    remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
+    echo "[*] Bypass done!"
+
+    sleep 2
+    echo "[*] Rebooting your device"
+    remote_cmd "/sbin/reboot"
+    sleep 1
+    exit;
 fi
 
 # ============
