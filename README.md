@@ -53,6 +53,7 @@ Type the following command in the terminal:
 Let the process finish and your device should be in recovery mode
 
 Once in recovery mode, we are already done with the bypass, just run the same palera1n command from before to boot.
+
 ```
 ./palera1n.sh --tweaks <iOS version> --verbose
 ```
@@ -63,6 +64,20 @@ Once in recovery mode, we are already done with the bypass, just run the same pa
 Now, proceed with setup as normal, you can skip Wi-Fi setup and won't be asked to activate your device.
 
 You can now jailbreak with palera1n too with the Tips app, enjoy!
+
+> In case that the JB breaks and you need to restore it, do the following:
+> 
+> ``./palera1n.sh --restorerootfs <iOS version>``
+>
+> ``./palera1n.sh clean``
+>
+> ``./palera1n.sh --tweaks <iOS version> --verbose``
+>
+> ``./palera1n.sh --bypass <iOS version>``
+>
+> ``./palera1n.sh --tweaks <iOS version> --verbose``
+>
+> And you should be booted back in with a clean JB
 
 # Credits
 
