@@ -24,14 +24,11 @@ disk=8
 # Functions
 # =========
 remote_cmd() {
-    sleep 1
-    "$dir"/sshpass -p "alpine" ssh -o StrictHostKeyChecking=no -p2222 root@localhost "$@"
-    sleep 1
+    "$dir"/sshpass -p 'alpine' ssh -o StrictHostKeyChecking=no -p2222 root@localhost "$@"
 }
+
 remote_cp() {
-    sleep 1
-    "$dir"/sshpass -p "alpine" scp -o StrictHostKeyChecking=no -P2222 $@
-    sleep 1
+    "$dir"/sshpass -p 'alpine' scp -o StrictHostKeyChecking=no -P2222 $@
 }
 
 step() {
@@ -608,7 +605,7 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
         exit;
     fi
 
-    echo "[*] Dumping blobs and installing Pogo"
+    echo "[*] Dumping blobs and installing Loader"
     sleep 1
     remote_cmd "cat /dev/rdisk1" | dd of=dump.raw bs=256 count=$((0x4000)) 
     "$dir"/img4tool --convert -s blobs/"$deviceid"-"$version".shsh2 dump.raw
