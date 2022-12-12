@@ -36,7 +36,7 @@ We will jailbreak with palera1n first to prepare all files:
 ```
 ./palera1n.sh --tweaks <iOS version> --verbose
 ```
->You will need to replace "<iOS version>" with the iOS version currently installed in your device. For example:
+>You will need to replace "\<iOS version\>" with the iOS version currently installed in your device. For example:
 >
 >``./palera1n.sh --tweaks 15.7.1 --verbose``
 
@@ -48,7 +48,7 @@ Type the following command in the terminal:
 ```
 ./palera1n.sh --bypass <iOS version>
 ```
-> Again, changing "<iOS version>" with your iOS version.
+> Again, changing "\<iOS version\>" with your iOS version.
 
 Let the process finish and your device should be in recovery mode
 
@@ -58,7 +58,7 @@ Once in recovery mode, we are already done with the bypass, just run the same pa
 ```
 > **Warning** You will have to run this command every time you want to boot your device!
 >
-> Remember to change "<iOS version>" with your iOS version too.
+> Remember to change "\<iOS version\>" with your iOS version too.
 
 Now, proceed with setup as normal, you can skip Wi-Fi setup and won't be asked to activate your device.
 
