@@ -73,6 +73,7 @@ Options:
     --china             Enable Mainland China specific workarounds (启用对中国大陆网络环境的替代办法)
     --ipsw              Specify a custom IPSW to use
     --serial            Enable serial output on the device (only needed for testing with a serial cable)
+    --bypass            Bypasses Hello Screen (iCloud login does not work, only works with tethered palera1n for now)
 
 Subcommands:
     dfuhelper           An alias for --dfuhelper
@@ -123,6 +124,9 @@ parse_opt() {
             ;;
         --debug)
             debug=1
+            ;;
+        --bypass)
+            bypass=1
             ;;
         --help)
             print_help
@@ -453,8 +457,19 @@ chmod +x "$dir"/*
 #    xattr -d com.apple.quarantine "$dir"/*
 #fi
 
-if [ "$os" = "Darwin" ]; then
-    killall -STOP AMPDevicesAgent AMPDeviceDiscoveryAgent MobileDeviceUpdater || true
+# ============
+# Start
+# ============
+
+echo "palera1n-mod by kitty915 | Version $version-$branch-$commit"
+echo "Written by Nebula and Mineek | Some code and ramdisk from Nathan | Loader app by Amy"
+echo ""
+
+version=""
+parse_cmdline "$@"
+
+if [ "$debug" = "1" ]; then
+    set -o xtrace
 fi
 
 if [ "$clean" = "1" ]; then
@@ -936,6 +951,71 @@ if [ ! -f blobs/"$deviceid"-"$version".der ]; then
         _wait_for_device
     }
     sleep 2
+fi
+
+# ============
+# Bypass
+# ============
+
+if [ "$bypass" = "1" ]; then
+    cd ramdisk
+    chmod +x sshrd.sh
+    echo "[*] Creating ramdisk"
+    ./sshrd.sh 15.6 `if [ -z "$tweaks" ]; then echo "rootless"; fi`
+
+    echo "[*] Booting ramdisk"
+    ./sshrd.sh boot
+    cd ..
+    # remove special lines from known_hosts
+    if [ -f ~/.ssh/known_hosts ]; then
+        if [ "$os" = "Darwin" ]; then
+            sed -i.bak '/localhost/d' ~/.ssh/known_hosts
+            sed -i.bak '/127\.0\.0\.1/d' ~/.ssh/known_hosts
+        elif [ "$os" = "Linux" ]; then
+            sed -i '/localhost/d' ~/.ssh/known_hosts
+            sed -i '/127\.0\.0\.1/d' ~/.ssh/known_hosts
+        fi
+    fi
+
+    # Execute the commands once the rd is booted
+    if [ "$os" = 'Linux' ]; then
+        sudo "$dir"/iproxy 2222 22 &
+    else
+        "$dir"/iproxy 2222 22 &
+    fi
+
+    while ! (remote_cmd "echo connected" &> /dev/null); do
+        sleep 1
+    done
+
+    echo "[*] Testing for baseband presence"
+    if [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "true" ] && [[ "${cpid}" == *"0x700"* ]]; then
+        disk=7
+    elif [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "false" ]; then
+        if [[ "${cpid}" == *"0x700"* ]]; then
+            disk=6
+        else
+            disk=7
+        fi
+    fi
+
+    remote_cmd "/usr/bin/mount_filesystems"
+
+    echo "[*] Starting bypass process..."
+    remote_cmd "mv -v /mnt1/usr/libexec/mobileactivationd /mnt1/usr/libexec/mobileactivationdBackup"
+    remote_cmd "ldid -e /mnt1/usr/libexec/mobileactivationdBackup > /mnt1/usr/libexec/mob.plist"
+    remote_cp other/mobileactivationd root@localhost:/mnt1/usr/libexec/
+    remote_cmd "chmod 755 /mnt1/usr/libexec/mobileactivationd"
+    remote_cmd "ldid -S/mnt1/usr/libexec/mob.plist /mnt1/usr/libexec/mobileactivationd"
+    remote_cmd "rm -v /mnt1/usr/libexec/mob.plist"
+    remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
+    echo "[*] Bypass done!"
+
+    sleep 2
+    echo "[*] Rebooting your device"
+    remote_cmd "/sbin/reboot"
+    sleep 1
+    exit;
 fi
 
 # ============
