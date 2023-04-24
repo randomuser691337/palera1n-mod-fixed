@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 
+pushd $(dirname "$0") &> /dev/null
+
 mkdir -p logs
-set -e
+set -e 
+
+log="$(date +%T)"-"$(date +%F)"-"$(uname)"-"$(uname -r)".log
+cd logs
+touch "$log"
+cd ..
 
 {
 
@@ -10,32 +17,39 @@ echo "[*] Command ran:`if [ $EUID = 0 ]; then echo " sudo"; fi` ./palera1n.sh $@
 # =========
 # Variables
 # =========
-ipsw="" # IF YOU WERE TOLD TO PUT A CUSTOM IPSW URL, PUT IT HERE. YOU CAN FIND THEM ON https://appledb.dev
-version="1.3.0"
+ipsw=""
+network_timeout=-1 # seconds; -1 - unlimited
+version="1.4.2"
 os=$(uname)
 dir="$(pwd)/binaries/$os"
-commit=$(git rev-parse --short HEAD)
-branch=$(git rev-parse --abbrev-ref HEAD)
-max_args=1
+commit=$(git rev-parse --short HEAD || true)
+branch=$(git rev-parse --abbrev-ref HEAD || true)
+max_args=2
 arg_count=0
 disk=8
+fs=disk0s1s$disk
 
 # =========
 # Functions
 # =========
 remote_cmd() {
-    "$dir"/sshpass -p 'alpine' ssh -o StrictHostKeyChecking=no -p2222 root@localhost "$@"
+    "$dir"/sshpass -p 'alpine' ssh -o StrictHostKeyChecking=no -p6413 root@localhost "$@"
 }
 
 remote_cp() {
-    "$dir"/sshpass -p 'alpine' scp -o StrictHostKeyChecking=no -P2222 $@
+    "$dir"/sshpass -p 'alpine' scp -o StrictHostKeyChecking=no -P6413 $@
 }
 
 step() {
+    rm -f .entered_dfu
     for i in $(seq "$1" -1 0); do
-        if [ "$(get_device_mode)" = "dfu" ]; then
+        if [[ -e .entered_dfu ]]; then
+            rm -f .entered_dfu
             break
         fi
+        if [[ $(get_device_mode) == "dfu" || ($1 == "10" && $(get_device_mode) != "none") ]]; then
+            touch .entered_dfu
+        fi &
         printf '\r\e[K\e[1;36m%s (%d)' "$2" "$i"
         sleep 1
     done
@@ -45,7 +59,7 @@ step() {
 print_help() {
     cat << EOF
 Usage: $0 [Options] [ subcommand | iOS version ]
-iOS 15.0-15.7.1 jailbreak tool for checkm8 devices
+iOS 15.0-16.3.1 jailbreak tool for checkm8 devices
 
 Options:
     --help              Print this help
@@ -53,11 +67,12 @@ Options:
     --semi-tethered     When used with --tweaks, make the jailbreak semi-tethered instead of tethered
     --dfuhelper         A helper to help get A11 devices into DFU mode from recovery mode
     --skip-fakefs       Don't create the fakefs even if --semi-tethered is specified
-    --no-install        Skip murdering Tips app
     --no-baseband       Indicate that the device does not have a baseband
     --restorerootfs     Remove the jailbreak (Actually more than restore rootfs)
     --debug             Debug the script
-    --verbose           Enable verbose boot on the device
+    --china             Enable Mainland China specific workarounds (启用对中国大陆网络环境的替代办法)
+    --ipsw              Specify a custom IPSW to use
+    --serial            Enable serial output on the device (only needed for testing with a serial cable)
     --bypass            Bypasses Hello Screen (iCloud login does not work, only works with tethered palera1n for now)
 
 Subcommands:
@@ -89,17 +104,23 @@ parse_opt() {
         --no-baseband)
             no_baseband=1
             ;;
-        --no-install)
-            no_install=1
-            ;;
-        --verbose)
-            verbose=1
+        --serial)
+            serial=1
             ;;
         --dfu)
             echo "[!] DFU mode devices are now automatically detected and --dfu is deprecated"
             ;;
         --restorerootfs)
             restorerootfs=1
+            ;;
+        --china)
+            china=1
+            ;;
+        --ipsw)
+            ipsw=$2
+            ;;
+        --ipsw=*)
+            ipsw=${1#*=}
             ;;
         --debug)
             debug=1
@@ -138,6 +159,8 @@ parse_cmdline() {
             parse_opt "$arg";
         elif [ "$arg_count" -lt "$max_args" ]; then
             parse_arg "$arg";
+        elif [[ $arg == http* ]]; then
+            continue
         else
             echo "[-] Too many arguments. Use $0 --help for help.";
             exit 1;
@@ -180,15 +203,16 @@ _pwn() {
 }
 
 _reset() {
-        echo "[*] Resetting DFU state"
-        "$dir"/gaster reset
+    echo "[*] Resetting DFU state"
+    "$dir"/gaster reset
 }
 
 get_device_mode() {
     if [ "$os" = "Darwin" ]; then
-        apples="$(system_profiler SPUSBDataType 2> /dev/null | grep -B1 'Vendor ID: 0x05ac' | grep 'Product ID:' | cut -dx -f2 | cut -d' ' -f1 | tail -r)"
+        sp="$(system_profiler SPUSBDataType 2> /dev/null)"
+        apples="$(printf '%s' "$sp" | grep -B1 'Vendor ID: 0x05ac' | grep 'Product ID:' | cut -dx -f2 | cut -d' ' -f1 | tail -r)"
     elif [ "$os" = "Linux" ]; then
-        apples="$(lsusb  | cut -d' ' -f6 | grep '05ac:' | cut -d: -f2)"
+        apples="$(lsusb | cut -d' ' -f6 | grep '05ac:' | cut -d: -f2)"
     fi
     local device_count=0
     local usbserials=""
@@ -230,7 +254,7 @@ get_device_mode() {
     if [ "$os" = "Linux" ]; then
         usbserials=$(cat /sys/bus/usb/devices/*/serial)
     elif [ "$os" = "Darwin" ]; then
-        usbserials=$(system_profiler SPUSBDataType 2> /dev/null| grep 'Serial Number' | cut -d: -f2- | sed 's/ //')
+        usbserials=$(printf '%s' "$sp" | grep 'Serial Number' | cut -d: -f2- | sed 's/ //')
     fi
     if grep -qE '(ramdisk tool|SSHRD_Script) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2} [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}' <<< "$usbserials"; then
         device_mode=ramdisk
@@ -252,7 +276,13 @@ _wait() {
     fi
 }
 
+dfuhelper_first_try=true
 _dfuhelper() {
+    if [ "$(get_device_mode)" = "dfu" ]; then
+        echo "[*] Device is already in DFU"
+        return
+    fi
+
     local step_one;
     deviceid=$( [ -z "$deviceid" ] && _info normal ProductType || echo $deviceid )
     if [[ "$1" = 0x801* && "$deviceid" != *"iPad"* ]]; then
@@ -260,12 +290,15 @@ _dfuhelper() {
     else
         step_one="Hold home + power button"
     fi
-    echo "[*] Press any key when ready for DFU mode"
-    read -n 1 -s
+    if $dfuhelper_first_try; then
+        echo "[*] Press any key when ready for DFU mode"
+        read -n 1 -s
+        dfuhelper_first_try=false
+    fi
     step 3 "Get ready"
     step 4 "$step_one" &
-    sleep 3
-    "$dir"/irecovery -c "reset"
+    sleep 2
+    "$dir"/irecovery -c "reset" &
     wait
     if [[ "$1" = 0x801* && "$deviceid" != *"iPad"* ]]; then
         step 10 'Release side button, but keep holding volume down'
@@ -276,39 +309,65 @@ _dfuhelper() {
     
     if [ "$(get_device_mode)" = "dfu" ]; then
         echo "[*] Device entered DFU!"
+        dfuhelper_first_try=true
     else
-        echo "[-] Device did not enter DFU mode, rerun the script and try again"
+        echo "[-] Device did not enter DFU mode"
         return -1
     fi
 }
 
+function _wait_for() {
+    timeout=$1
+    shift 1
+    until [ $timeout -eq 0 ] || ("$@" &> /dev/null); do
+        sleep 1
+        timeout=$(( timeout - 1 ))
+    done
+    if [ $timeout -eq 0 ]; then
+        return -1
+    fi
+}
+
+function _network() {
+    curl -s -m 1 https://static.palera.in &>/dev/null
+}
+
+function _check_network_connection() {
+    if ! _network; then
+        echo "[*] Waiting for network"
+        if ! _wait_for $network_timeout _network; then
+            echo "[-] Network is unreachable. Check your connection and try again"
+            exit 1
+        fi
+    fi
+}
+
 _kill_if_running() {
-    if (pgrep -u root -xf "$1" &> /dev/null > /dev/null); then
+    if (pgrep -u root -x "$1" &> /dev/null > /dev/null); then
         # yes, it's running as root. kill it
-        sudo killall $1
+        sudo killall $1 &> /dev/null
     else
         if (pgrep -x "$1" &> /dev/null > /dev/null); then
-            killall $1
+            killall $1 &> /dev/null
         fi
     fi
 }
 
 _exit_handler() {
-    if [ "$os" = 'Darwin' ]; then
-        defaults write -g ignore-devices -bool false
-        defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool false
-        killall Finder
+    if [ "$os" = "Darwin" ]; then
+        killall -CONT AMPDevicesAgent AMPDeviceDiscoveryAgent MobileDeviceUpdater || true
     fi
+
     [ $? -eq 0 ] && exit
     echo "[-] An error occurred"
 
-    cd logs
-    for file in *.log; do
-        mv "$file" FAIL_${file}
-    done
-    cd ..
+    if [ -d "logs" ]; then
+        cd logs
+        mv "$log" FAIL_${log}
+        cd ..
+    fi
 
-    echo "[*] A failure log has been made. If you're going to make a GitHub issue, please attach the latest log."
+    echo "[*] A failure log has been made. If you're going ask for help, please attach the latest log."
 }
 trap _exit_handler EXIT
 
@@ -316,11 +375,19 @@ trap _exit_handler EXIT
 # Fixes
 # ===========
 
-# Prevent Finder from complaning
-if [ "$os" = 'Darwin' ]; then
-    defaults write -g ignore-devices -bool true
-    defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool true
-    killall Finder
+# ============
+# Start
+# ============
+
+echo "palera1n | Version $version-$branch-$commit"
+echo "Made with ❤ by Nebula, Mineek, Nathan, llsc12, Ploosh, and Nick Chan"
+echo ""
+
+version=""
+parse_cmdline "$@"
+
+if [ "$debug" = "1" ]; then
+    set -o xtrace
 fi
 
 # ============
@@ -348,7 +415,10 @@ if [ -e "$dir"/gaster ]; then
 fi
 
 if [ ! -e "$dir"/gaster ]; then
-    curl -sLO https://nightly.link/palera1n/gaster/workflows/makefile/main/gaster-"$os".zip
+    echo '[-] gaster not installed. Press any key to install it, or press ctrl + c to cancel'
+    read -n 1 -s
+    _check_network_connection
+    curl -sLO https://static.palera.in/deps/gaster-"$os".zip
     unzip gaster-"$os".zip
     mv gaster "$dir"/
     rm -rf gaster gaster-"$os".zip
@@ -358,6 +428,7 @@ fi
 if ! python3 -c 'import pkgutil; exit(not pkgutil.find_loader("pyimg4"))'; then
     echo '[-] pyimg4 not installed. Press any key to install it, or press ctrl + c to cancel'
     read -n 1 -s
+    _check_network_connection
     python3 -m pip install pyimg4
 fi
 
@@ -366,7 +437,12 @@ fi
 # ============
 
 # Update submodules
-git submodule update --init --recursive
+if [ "$china" != "1" ]; then
+    git submodule update --init --recursive
+elif ! [ -f ramdisk/sshrd.sh ]; then
+    curl -LO https://static.palera.in/deps/ramdisk.tgz
+    tar xf ramdisk.tgz
+fi
 
 # Re-create work dir if it exists, else, make it
 if [ -e work ]; then
@@ -413,8 +489,8 @@ if [ "$tweaks" = 1 ] && [ ! -e ".tweaksinstalled" ] && [ ! -e ".disclaimeragree"
     echo "!!! WARNING WARNING WARNING !!!"
     echo "This flag will add tweak support BUT WILL BE TETHERED."
     echo "THIS ALSO MEANS THAT YOU'LL NEED A PC EVERY TIME TO BOOT."
-    echo "THIS ONLY WORKS ON 15.0-15.7.1"
-    echo "DO NOT GET ANGRY AT US IF UR DEVICE IS BORKED, IT'S YOUR OWN FAULT AND WE WARNED YOU"
+    echo "THIS WORKS ON 15.0-16.3"
+    echo "DO NOT GET ANGRY AT US IF YOUR DEVICE IS BORKED, IT'S YOUR OWN FAULT AND WE WARNED YOU"
     echo "DO YOU UNDERSTAND? TYPE 'Yes, do as I say' TO CONTINUE"
     read -r answer
     if [ "$answer" = 'Yes, do as I say' ]; then
@@ -426,120 +502,152 @@ if [ "$tweaks" = 1 ] && [ ! -e ".tweaksinstalled" ] && [ ! -e ".disclaimeragree"
             tweaks=1
             touch .disclaimeragree
         else
+            echo "[-] Please type it exactly if you'd like to proceed. Otherwise, remove --tweaks, or add --semi-tethered"
             exit
         fi
     else
+        echo "[-] Please type it exactly if you'd like to proceed. Otherwise, remove --tweaks, or add --semi-tethered"
         exit
     fi
 fi
 
-# Get device's iOS version from ideviceinfo if in normal mode
-echo "[*] Waiting for devices"
-while [ "$(get_device_mode)" = "none" ]; do
-    sleep 1;
-done
-echo $(echo "[*] Detected $(get_device_mode) mode device" | sed 's/dfu/DFU/')
+function _wait_for_device() {
+    # Get device's iOS version from ideviceinfo if in normal mode
+    echo "[*] Waiting for devices"
+    while [ "$(get_device_mode)" = "none" ]; do
+        sleep 1;
+    done
+    echo $(echo "[*] Detected $(get_device_mode) mode device" | sed 's/dfu/DFU/')
 
-if grep -E 'pongo|checkra1n_stage2|diag' <<< "$(get_device_mode)"; then
-    echo "[-] Detected device in unsupported mode '$(get_device_mode)'"
-    exit 1;
-fi
-
-if [ "$(get_device_mode)" != "normal" ] && [ -z "$version" ] && [ "$dfuhelper" != "1" ]; then
-    echo "[-] You must pass the version your device is on when not starting from normal mode"
-    exit
-fi
-
-if [ "$(get_device_mode)" = "ramdisk" ]; then
-    # If a device is in ramdisk mode, perhaps iproxy is still running?
-    _kill_if_running iproxy
-    echo "[*] Rebooting device in SSH Ramdisk"
-    if [ "$os" = 'Linux' ]; then
-        sudo "$dir"/iproxy 2222 22 &
-    else
-        "$dir"/iproxy 2222 22 &
+    if grep -E 'pongo|checkra1n_stage2|diag' <<< "$(get_device_mode)"; then
+        echo "[-] Detected device in unsupported mode '$(get_device_mode)'"
+        exit 1;
     fi
-    sleep 2
-    remote_cmd "/usr/sbin/nvram auto-boot=false"
-    remote_cmd "/sbin/reboot"
-    _kill_if_running iproxy
-    _wait recovery
-fi
 
-if [ "$(get_device_mode)" = "normal" ]; then
-    version=$(_info normal ProductVersion)
-    arch=$(_info normal CPUArchitecture)
-    if [ "$arch" = "arm64e" ]; then
+    if [ "$(get_device_mode)" != "normal" ] && [ -z "$version" ] && [ "$dfuhelper" != "1" ]; then
+        echo "[-] You must pass the version your device is on when not starting from normal mode"
+        exit
+    fi
+
+    if [ "$(get_device_mode)" = "ramdisk" ]; then
+        # If a device is in ramdisk mode, perhaps iproxy is still running?
+        _kill_if_running iproxy
+        echo "[*] Rebooting device in SSH Ramdisk"
+        if [ "$os" = 'Linux' ]; then
+            sudo "$dir"/iproxy 6413 22 >/dev/null &
+        else
+            "$dir"/iproxy 6413 22 >/dev/null &
+        fi
+        sleep 2
+        remote_cmd "/usr/sbin/nvram auto-boot=false"
+        remote_cmd "/sbin/reboot"
+        _kill_if_running iproxy
+        _wait recovery
+    fi
+
+    if [ "$(get_device_mode)" = "normal" ]; then
+        version=${version:-$(_info normal ProductVersion)}
+        arch=$(_info normal CPUArchitecture)
+        if [ "$arch" = "arm64e" ]; then
+            echo "[-] palera1n doesn't, and never will, work on non-checkm8 devices"
+            exit
+        fi
+        echo "Hello, $(_info normal ProductType) on $version!"
+
+        echo "[*] Switching device into recovery mode..."
+        "$dir"/ideviceenterrecovery $(_info normal UniqueDeviceID)
+        _wait recovery
+    fi
+
+    # Grab more info
+    echo "[*] Getting device info..."
+    cpid=$(_info recovery CPID)
+    model=$(_info recovery MODEL)
+    deviceid=$(_info recovery PRODUCT)
+
+    if (( 0x8020 <= cpid )) && (( cpid < 0x8720 )); then
         echo "[-] palera1n doesn't, and never will, work on non-checkm8 devices"
         exit
     fi
-    echo "Hello, $(_info normal ProductType) on $version!"
 
-    echo "[*] Switching device into recovery mode..."
-    "$dir"/ideviceenterrecovery $(_info normal UniqueDeviceID)
-    _wait recovery
-fi
+    version_major=${version%%.*}
+    version_minor=${version#*.}
+    version_minor=${version_minor%%.*}
+    if [[ $version_major -eq 16 && $version_minor -ge 4 ]] || [[ $version_major -ge 17 ]]; then
+        echo "[-] palera1n.sh does not work on iOS 16.4 and above."
+        echo "[-] Refusing to proceed as it would bootloop your device and force you to restore."
+        exit
+    fi
 
-# Grab more info
-echo "[*] Getting device info..."
-cpid=$(_info recovery CPID)
-model=$(_info recovery MODEL)
-deviceid=$(_info recovery PRODUCT)
+    if [ "$dfuhelper" = "1" ]; then
+        echo "[*] Running DFU helper"
+        _dfuhelper "$cpid" || {
+            echo "[-] Failed to enter DFU mode, trying again"
+            sleep 3
+            _wait_for_device
+        }
+        exit
+    fi
 
-if [ "$dfuhelper" = "1" ]; then
-    echo "[*] Running DFU helper"
-    _dfuhelper "$cpid"
-    exit
-fi
-
-if [ ! "$ipsw" = "" ]; then
-    ipswurl=$ipsw
-else
-    #buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/$version | "$dir"/jq '.[0] | .buildid' --raw-output)
-    if [[ "$deviceid" == *"iPad"* ]]; then
-        device_os=iPadOS
-        device=iPad
-    elif [[ "$deviceid" == *"iPod"* ]]; then
-        device_os=iOS
-        device=iPod
+    if [ ! "$ipsw" = "" ]; then
+        ipswurl=$ipsw
     else
-        device_os=iOS
-        device=iPhone
+        #buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/$version | "$dir"/jq '.[0] | .buildid' --raw-output)
+        if [[ "$deviceid" == *"iPad"* ]]; then
+            device_os=iPadOS
+            device=iPad
+        elif [[ "$deviceid" == *"iPod"* ]]; then
+            device_os=iOS
+            device=iPod
+        else
+            device_os=iOS
+            device=iPhone
+        fi
+
+        _check_network_connection
+        buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/$version | "$dir"/jq '[.[] | select(.identifier | startswith("'$device'")) | .buildid][0]' --raw-output)
+        if [ "$buildid" == "19B75" ]; then
+            buildid=19B74
+        fi
+        ipswurl=$(curl -sL https://api.appledb.dev/ios/$device_os\;$buildid.json | "$dir"/jq -r .devices\[\"$deviceid\"\].ipsw)
     fi
 
-    buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/$version | "$dir"/jq '[.[] | select(.identifier | startswith("'$device'")) | .buildid][0]' --raw-output)
-    if [ "$buildid" == "19B75" ]; then
-        buildid=19B74
+    if [ "$restorerootfs" = "1" ]; then
+        rm -rf "blobs/"$deviceid"-"$version".der" "boot-$deviceid" work .tweaksinstalled ".fs-$deviceid"
     fi
-    ipswurl=$(curl -sL https://api.appledb.dev/ios/$device_os\;$buildid.json | "$dir"/jq -r .devices\[\"$deviceid\"\].ipsw)
-fi
 
-if [ "$restorerootfs" = "1" ]; then
-    rm -rf "blobs/"$deviceid"-"$version".shsh2" "boot-$deviceid" work .tweaksinstalled
-fi
-
-# Have the user put the device into DFU
-if [ "$(get_device_mode)" != "dfu" ]; then
-    recovery_fix_auto_boot;
-    _dfuhelper "$cpid" || {
-        echo "[-] failed to enter DFU mode, run palera1n.sh again"
-        exit -1
-    }
-fi
-sleep 2
+    # Have the user put the device into DFU
+    if [ "$(get_device_mode)" != "dfu" ]; then
+        recovery_fix_auto_boot;
+        _dfuhelper "$cpid" || {
+            echo "[-] Failed to enter DFU mode, trying again"
+            sleep 3
+            _wait_for_device
+        }
+    fi
+    sleep 2
+}
+_wait_for_device
 
 # ============
 # Ramdisk
 # ============
 
 # Dump blobs, and install pogo if needed 
-if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
+if [ -f blobs/"$deviceid"-"$version".der ]; then
+    if [ -f .rd_in_progress ] || ! [ -f .fs-"$deviceid" ]; then
+        rm blobs/"$deviceid"-"$version".der
+    fi
+fi
+
+if [ ! -f blobs/"$deviceid"-"$version".der ]; then
     mkdir -p blobs
+    _kill_if_running iproxy
 
     cd ramdisk
     chmod +x sshrd.sh
     echo "[*] Creating ramdisk"
-    ./sshrd.sh 15.6 `if [ -z "$tweaks" ]; then echo "rootless"; fi`
+    ./sshrd.sh `if [[ "$version" == *"16"* ]]; then echo "16.0.3"; else echo "15.6"; fi` `if [ -z "$tweaks" ]; then echo "rootless"; fi`
 
     echo "[*] Booting ramdisk"
     ./sshrd.sh boot
@@ -557,68 +665,81 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
 
     # Execute the commands once the rd is booted
     if [ "$os" = 'Linux' ]; then
-        sudo "$dir"/iproxy 2222 22 &
+        sudo "$dir"/iproxy 6413 22 >/dev/null &
     else
-        "$dir"/iproxy 2222 22 &
+        "$dir"/iproxy 6413 22 >/dev/null &
     fi
 
     while ! (remote_cmd "echo connected" &> /dev/null); do
         sleep 1
     done
 
-    echo "[*] Testing for baseband presence"
-    if [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "true" ] && [[ "${cpid}" == *"0x700"* ]]; then
-        disk=7
-    elif [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "false" ]; then
-        if [[ "${cpid}" == *"0x700"* ]]; then
-            disk=6
-        else
+    touch .rd_in_progress
+    
+    if [ "$tweaks" = "1" ] && [ "$semi_tethered" = "1" ]; then
+        echo "[*] Testing for baseband presence"
+        if [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "true" ] && [[ "${cpid}" == *"0x700"* ]]; then
             disk=7
+        elif [ "$(remote_cmd "/usr/bin/mgask HasBaseband | grep -E 'true|false'")" = "false" ]; then
+            if [[ "${cpid}" == *"0x700"* ]]; then
+                disk=6
+            else
+                disk=7
+            fi
         fi
+    else
+        disk=1
     fi
 
-    remote_cmd "/usr/bin/mount_filesystems"
+    echo "$disk" > .fs-"$deviceid"
+
+    if [[ "$version" == *"16"* ]]; then
+        fs=disk1s$disk
+    else
+        fs=disk0s1s$disk
+    fi
+
+    # mount filesystems, no user data partition
+    remote_cmd "/usr/bin/mount_filesystems_nouser"
 
     has_active=$(remote_cmd "ls /mnt6/active" 2> /dev/null)
     if [ ! "$has_active" = "/mnt6/active" ]; then
         echo "[!] Active file does not exist! Please use SSH to create it"
         echo "    /mnt6/active should contain the name of the UUID in /mnt6"
         echo "    When done, type reboot in the SSH session, then rerun the script"
-        echo "    ssh root@localhost -p 2222"
+        echo "    ssh root@localhost -p 6413"
         exit
     fi
     active=$(remote_cmd "cat /mnt6/active" 2> /dev/null)
 
     if [ "$restorerootfs" = "1" ]; then
         echo "[*] Removing Jailbreak"
-        remote_cmd "/sbin/apfs_deletefs disk0s1s${disk} > /dev/null || true"
-        remote_cmd "rm -f /mnt2/jb"
-        remote_cmd "rm -rf /mnt2/cache /mnt2/lib"
-        remote_cmd "rm -rf /mnt6/$active/procursus"
+        if [ ! "$fs" = "disk1s1" ] || [ ! "$fs" = "disk0s1s1" ]; then
+            remote_cmd "/sbin/apfs_deletefs $fs > /dev/null || true"
+        fi
         remote_cmd "rm -f /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd"
-        remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache 2> /dev/null || true"
+        remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache || true"
         remote_cmd "/bin/sync"
         remote_cmd "/usr/sbin/nvram auto-boot=true"
         rm -f BuildManifest.plist
-        echo "[*] Done! Rebooting your device"
+        echo "[*] Done! Rebooting your device (if it doesn't reboot, you may force reboot)"
         remote_cmd "/sbin/reboot"
         exit;
     fi
 
-    echo "[*] Dumping blobs and installing Loader"
+    echo "[*] Dumping apticket"
     sleep 1
-    remote_cmd "cat /dev/rdisk1" | dd of=dump.raw bs=256 count=$((0x4000)) 
-    "$dir"/img4tool --convert -s blobs/"$deviceid"-"$version".shsh2 dump.raw
-    rm dump.raw
+    remote_cp root@localhost:/mnt6/$active/System/Library/Caches/apticket.der blobs/"$deviceid"-"$version".der
+    #remote_cmd "cat /dev/rdisk1" | dd of=dump.raw bs=256 count=$((0x4000)) 
+    #"$dir"/img4tool --convert -s blobs/"$deviceid"-"$version".shsh2 dump.raw
+    #rm dump.raw
 
     if [ "$semi_tethered" = "1" ]; then
         if [ -z "$skip_fakefs" ]; then
             echo "[*] Creating fakefs, this may take a while (up to 10 minutes)"
-            remote_cmd "/sbin/newfs_apfs -A -D -o role=r -v System /dev/disk0s1" && {
-                
+            remote_cmd "/sbin/newfs_apfs -A -D -o role=r -v Xystem /dev/disk0s1" && {
             sleep 2
-            remote_cmd "/sbin/mount_apfs /dev/disk0s1s${disk} /mnt8"
-            
+            remote_cmd "/sbin/mount_apfs /dev/$fs /mnt8"
             sleep 1
             remote_cmd "cp -a /mnt1/. /mnt8/"
             sleep 1
@@ -627,54 +748,37 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
         fi
     fi
 
-    if [ -z "$no_install" ]; then
-        tipsdir=$(remote_cmd "/usr/bin/find /mnt2/containers/Bundle/Application/ -name 'Tips.app'" 2> /dev/null)
-        sleep 1
-        if [ "$tipsdir" = "" ]; then
-            echo "[!] Tips is not installed. Once your device reboots, install Tips from the App Store and retry"
-            remote_cmd "/sbin/reboot"
-            sleep 1
-            _kill_if_running iproxy
-            exit
-        fi
-        remote_cmd "/bin/mkdir -p /mnt1/private/var/root/temp"
-        sleep 1
-        remote_cmd "/bin/cp -r /usr/local/bin/loader.app/* /mnt1/private/var/root/temp"
-        sleep 1
-        remote_cmd "/bin/rm -rf /mnt1/private/var/root/temp/Info.plist /mnt1/private/var/root/temp/Base.lproj /mnt1/private/var/root/temp/PkgInfo"
-        sleep 1
-        remote_cmd "/bin/cp -rf /mnt1/private/var/root/temp/* $tipsdir"
-        sleep 1
-        remote_cmd "/bin/rm -rf /mnt1/private/var/root/temp"
-        sleep 1
-        remote_cmd "/usr/sbin/chown 33 $tipsdir/Tips"
-        sleep 1
-        remote_cmd "/bin/chmod 755 $tipsdir/Tips $tipsdir/palera1nHelper"
-        sleep 1
-        remote_cmd "/usr/sbin/chown 0 $tipsdir/palera1nHelper"
-    fi
-
     #remote_cmd "/usr/sbin/nvram allow-root-hash-mismatch=1"
     #remote_cmd "/usr/sbin/nvram root-live-fs=1"
-    if [ "$semi_tethered" = "1" ] || [ -z "$tweaks" ]; then
-        remote_cmd "/usr/sbin/nvram auto-boot=true"
+    if [ "$tweaks" = "1" ]; then
+        if [ "$semi_tethered" = "1" ]; then
+            remote_cmd "/usr/sbin/nvram auto-boot=true"
+        else
+            remote_cmd "/usr/sbin/nvram auto-boot=false"
+        fi
     else
-        remote_cmd "/usr/sbin/nvram auto-boot=false"
+        remote_cmd "/usr/sbin/nvram auto-boot=true"
     fi
-
-    remote_cp binaries/Kernel15Patcher.ios root@localhost:/mnt1/private/var/root/Kernel15Patcher.ios
-    remote_cmd "/usr/sbin/chown 0 /mnt1/private/var/root/Kernel15Patcher.ios"
-    remote_cmd "/bin/chmod 755 /mnt1/private/var/root/Kernel15Patcher.ios"
 
     # lets actually patch the kernel
     echo "[*] Patching the kernel"
+    remote_cmd "rm -f /mnt6/$active/kpf"
+    remote_cp binaries/kpf.ios root@localhost:/mnt6/$active/kpf
+    remote_cmd "/usr/sbin/chown 0 /mnt6/$active/kpf"
+    remote_cmd "/bin/chmod 755 /mnt6/$active/kpf"
+
     remote_cmd "rm -f /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.im4p /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcachd"
-    if [ "$semi_tethered" = "1" ] || [ -z "$tweaks" ]; then
-        remote_cmd "cp /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak"
-    else
-        remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak"
+    if [ "$tweaks" = "1" ]; then
+        if [ "$semi_tethered" = "1" ]; then
+            remote_cmd "cp /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak"
+        else
+            remote_cmd "mv /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kernelcache.bak || true"
+        fi
     fi
     sleep 1
+
+    # Checking network connection before downloads
+    _check_network_connection
 
     # download the kernel
     echo "[*] Downloading BuildManifest"
@@ -683,6 +787,7 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
     echo "[*] Downloading kernelcache"
     "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/kernelcache.release/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
     
+    echo "[*] Patching kernelcache"
     mv kernelcache.release.* work/kernelcache
     if [[ "$deviceid" == "iPhone8"* ]] || [[ "$deviceid" == "iPad6"* ]] || [[ "$deviceid" == *'iPad5'* ]]; then
         python3 -m pyimg4 im4p extract -i work/kernelcache -o work/kcache.raw --extra work/kpp.bin
@@ -691,9 +796,18 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
     fi
     sleep 1
     remote_cp work/kcache.raw root@localhost:/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/
-    remote_cmd "/mnt1/private/var/root/Kernel15Patcher.ios /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched"
+    remote_cmd "/mnt6/$active/kpf /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.raw /mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched"
     remote_cp root@localhost:/mnt6/$active/System/Library/Caches/com.apple.kernelcaches/kcache.patched work/
-    "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -e
+    if [ "$tweaks" = "1" ]; then
+        if [[ "$version" == *"16"* ]]; then
+            "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -e -o -u -l -h -d
+        else
+            "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -e -l
+        fi
+    else
+        "$dir"/Kernel64Patcher work/kcache.patched work/kcache.patched2 -a
+    fi
+    
     sleep 1
     if [[ "$deviceid" == *'iPhone8'* ]] || [[ "$deviceid" == *'iPad6'* ]] || [[ "$deviceid" == *'iPad5'* ]]; then
         python3 -m pyimg4 im4p create -i work/kcache.patched2 -o work/kcache.im4p -f krnl --extra work/kpp.bin --lzss
@@ -713,11 +827,106 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
         echo "[!] Custom kernelcache doesn't exist..? Please send a log and report this bug..."
     fi
 
-    rm -rf work
+    if [ "$tweaks" = "1" ]; then
+        sleep 1
+        if [ "$semi_tethered" = "1" ]; then
+            remote_cmd "/sbin/mount_apfs /dev/$fs /mnt8 || true"
+            di=8
+        else
+            disk=1
+            di=1
+        fi
+
+        if [[ "$version" == *"16"* ]]; then
+            remote_cmd "rm -rf /mnt$di/System/Library/Caches/com.apple.dyld"
+            remote_cmd "ln -s /System/Cryptexes/OS/System/Library/Caches/com.apple.dyld /mnt$di/System/Library/Caches/"
+        fi
+
+        # iOS 16 stuff
+        # if [[ "$version" == *"16"* ]]; then
+        #     if [ -z "$semi_tethered" ]; then
+        #         echo "[*] Performing iOS 16 fixes"
+        #         sleep 1
+        #         os_disk=$(remote_cmd "/usr/sbin/hdik /mnt6/cryptex1/current/os.dmg | head -3 | tail -1 | sed 's/ .*//'")
+        #         sleep 1
+        #         app_disk=$(remote_cmd "/usr/sbin/hdik /mnt6/cryptex1/current/app.dmg | head -3 | tail -1 | sed 's/ .*//'")
+        #         sleep 1
+        #         remote_cmd "/sbin/mount_apfs -o ro $os_disk /mnt2"
+        #         sleep 1
+        #         remote_cmd "/sbin/mount_apfs -o ro $app_disk /mnt9"
+        #         sleep 1
+
+        #         remote_cmd "rm -rf /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
+        #         sleep 1
+        #         remote_cmd "mkdir /mnt1/System/Cryptexes/App /mnt1/System/Cryptexes/OS"
+        #         sleep 1
+        #         remote_cmd "cp -a /mnt9/. /mnt1/System/Cryptexes/App"
+        #         sleep 1
+        #         remote_cmd "cp -a /mnt2/. /mnt1/System/Cryptexes/OS"
+        #         sleep 1
+        #         remote_cmd "rm -rf /mnt1/System/Cryptexes/OS/System/Library/Caches/com.apple.dyld"
+        #         sleep 1
+        #         remote_cmd "cp -a /mnt2/System/Library/Caches/com.apple.dyld /mnt1/System/Library/Caches/"
+        #     fi
+        # fi
+
+        echo "[*] Copying files to rootfs"
+        remote_cmd "rm -rf /mnt$di/jbin /mnt$di/.installed_palera1n"
+        sleep 1
+        remote_cmd "mkdir -p /mnt$di/jbin/binpack /mnt$di/jbin/loader.app"
+        sleep 1
+
+        # Checking network connection before downloads
+        _check_network_connection
+
+        # download loader
+        cd other/rootfs/jbin
+        rm -rf loader.app
+        echo "[*] Downloading loader"
+        curl -LO https://static.palera.in/artifacts/loader/rootful/palera1n.ipa
+        unzip palera1n.ipa -d .
+        mv Payload/palera1nLoader.app loader.app
+        rm -rf palera1n.zip loader.zip palera1n.ipa Payload
+        
+        # download jbinit files
+        rm -f jb.dylib jbinit jbloader launchd
+        echo "[*] Downloading jbinit files"
+        curl -L https://static.palera.in/deps/rootfs.zip -o rfs.zip
+        unzip rfs.zip -d .
+        unzip rootfs.zip -d .
+        rm rfs.zip rootfs.zip
+        cd ../../..
+
+        # download binpack
+        mkdir -p other/rootfs/jbin/binpack
+        echo "[*] Downloading binpack"
+        curl -L https://static.palera.in/binpack.tar -o other/rootfs/jbin/binpack/binpack.tar
+
+        sleep 1
+        remote_cp -r other/rootfs/* root@localhost:/mnt$di
+        {
+            echo "{"
+            echo "    \"version\": \"${version} (${commit}_${branch})\","
+            echo "    \"args\": \"$@\","
+            echo "    \"pc\": \"$(uname) $(uname -r)\""
+            echo "}"
+        } > work/.installed_palera1n
+        sleep 1
+        remote_cp work/.installed_palera1n root@localhost:/mnt$di
+
+        remote_cmd "ldid -s /mnt$di/jbin/launchd /mnt$di/jbin/jbloader /mnt$di/jbin/jb.dylib"
+        remote_cmd "chmod +rwx /mnt$di/jbin/launchd /mnt$di/jbin/jbloader /mnt$di/jbin/post.sh"
+        remote_cmd "tar -xvf /mnt$di/jbin/binpack/binpack.tar -C /mnt$di/jbin/binpack/"
+        sleep 1
+        remote_cmd "rm /mnt$di/jbin/binpack/binpack.tar"
+    fi
+
+    rm -rf work BuildManifest.plist
     mkdir work
+    rm .rd_in_progress
 
     sleep 2
-    echo "[*] Done! Rebooting your device"
+    echo "[*] Phase 1 done! Rebooting your device (if it doesn't reboot, you may force reboot)"
     remote_cmd "/sbin/reboot"
     sleep 1
     _kill_if_running iproxy
@@ -736,7 +945,11 @@ if [ ! -f blobs/"$deviceid"-"$version".shsh2 ]; then
         "$dir"/ideviceenterrecovery $(_info normal UniqueDeviceID)
     fi
     _wait recovery
-    _dfuhelper
+    _dfuhelper "$cpid" || {
+        echo "[-] Failed to enter DFU mode, trying again"
+        sleep 3
+        _wait_for_device
+    }
     sleep 2
 fi
 
@@ -810,8 +1023,28 @@ fi
 # ============
 
 # Actually create the boot files
-if [ ! -f boot-"$deviceid"/.local ]; then
-    rm -rf boot-"$deviceid"
+disk=$(cat .fs-"$deviceid")
+if [[ "$version" == *"16"* ]]; then
+    fs=disk1s$disk
+else
+    fs=disk0s1s$disk
+fi
+
+boot_args=""
+if [ "$serial" = "1" ]; then
+    boot_args="serial=3"
+else
+    boot_args="-v"
+fi
+
+if [[ "$deviceid" == iPhone9,[1-4] ]] || [[ "$deviceid" == "iPhone10,"* ]]; then
+    if [ ! -f boot-"$deviceid"/.payload ]; then
+        rm -rf boot-"$deviceid"
+    fi
+else
+    if [ ! -f boot-"$deviceid"/.local ]; then
+        rm -rf boot-"$deviceid"
+    fi
 fi
 
 if [ ! -f boot-"$deviceid"/ibot.img4 ]; then
@@ -819,47 +1052,89 @@ if [ ! -f boot-"$deviceid"/ibot.img4 ]; then
     rm -rf boot-"$deviceid"
     mkdir boot-"$deviceid"
 
-    echo "[*] Converting blob"
-    "$dir"/img4tool -e -s "$(pwd)"/blobs/"$deviceid"-"$version".shsh2 -m work/IM4M
+    #echo "[*] Converting blob"
+    #"$dir"/img4tool -e -s $(pwd)/blobs/"$deviceid"-"$version".shsh2 -m work/IM4M
     cd work
 
-    echo "[*] Downloading BuildManifest"
-    "$dir"/pzb -g BuildManifest.plist "$ipswurl"
+    # Checking network connection before downloads
+    _check_network_connection
 
-    echo "[*] Downloading and decrypting iBSS"
-    "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
-    "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]dfu[/]//')" iBSS.dec
-
-    echo "[*] Downloading and decrypting iBoot"
-    "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
-    "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]all_flash[/]//')" ibot.dec
-
-    echo "[*] Patching and signing iBSS/iBoot"
-    "$dir"/iBoot64Patcher iBSS.dec iBSS.patched
-    if [ "$semi_tethered" = "1" ]; then
-        if [ "$verbose" = "1" ]; then
-            "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "-v rd=disk0s1s${disk}" -l
+    # Do payload if on iPhone 7-X
+    if [[ "$deviceid" == iPhone9,[1-4] ]] || [[ "$deviceid" == "iPhone10,"* ]]; then
+        if [[ "$version" == "16.0"* ]] || [[ "$version" == "15"* ]]; then
+            newipswurl="$ipswurl"
         else
-            "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "rd=disk0s1s${disk}" -l
+            buildid=$(curl -sL https://api.ipsw.me/v4/ipsw/16.0.3 | "$dir"/jq '[.[] | select(.identifier | startswith("'iPhone'")) | .buildid][0]' --raw-output)
+            newipswurl=$(curl -sL https://api.appledb.dev/ios/iOS\;$buildid.json | "$dir"/jq -r .devices\[\"$deviceid\"\].ipsw)
         fi
-    else
-        if [ "$verbose" = "1" ]; then
-            "$dir"/iBoot64Patcher ibot.dec ibot.patched -b '-v' -f
-        else
-            "$dir"/iBoot64Patcher ibot.dec ibot.patched -f
-        fi
-    fi
-    if [ "$os" = 'Linux' ]; then
-        sed -i 's/\/\kernelcache/\/\kernelcachd/g' ibot.patched
-    else
-        LC_ALL=C sed -i.bak -e 's/s\/\kernelcache/s\/\kernelcachd/g' ibot.patched
-        rm *.bak
-    fi
-    cd ..
-    "$dir"/img4 -i work/iBSS.patched -o boot-"$deviceid"/iBSS.img4 -M work/IM4M -A -T ibss
-    "$dir"/img4 -i work/ibot.patched -o boot-"$deviceid"/ibot.img4 -M work/IM4M -A -T `if [[ "$cpid" == *"0x801"* ]]; then echo "ibss"; else echo "ibec"; fi`
 
-    touch boot-"$deviceid"/.local
+        echo "[*] Downloading BuildManifest"
+        "$dir"/pzb -g BuildManifest.plist "$newipswurl"
+
+        echo "[*] Downloading and decrypting iBoot"
+        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$newipswurl"
+        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]all_flash[/]//')" ibot.dec
+
+        echo "[*] Patching and signing iBoot"
+        "$dir"/iBoot64Patcher ibot.dec ibot.patched
+
+        if [[ "$deviceid" == iPhone9,[1-4] ]]; then
+            "$dir"/iBootpatch2 --t8010 ibot.patched ibot.patched2
+        else
+            "$dir"/iBootpatch2 --t8015 ibot.patched ibot.patched2
+        fi
+
+        if [ "$os" = 'Linux' ]; then
+            sed -i 's/\/\kernelcache/\/\kernelcachd/g' ibot.patched2
+        else
+            LC_ALL=C sed -i.bak -e 's/s\/\kernelcache/s\/\kernelcachd/g' ibot.patched2
+            rm *.bak
+        fi
+
+        cd ..
+        "$dir"/img4 -i work/ibot.patched2 -o boot-"$deviceid"/ibot.img4 -M blobs/"$deviceid"-"$version".der -A -T ibss
+
+        touch boot-"$deviceid"/.payload
+    else
+        echo "[*] Downloading BuildManifest"
+        "$dir"/pzb -g BuildManifest.plist "$ipswurl"
+
+        echo "[*] Downloading and decrypting iBSS"
+        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
+        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBSS[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]dfu[/]//')" iBSS.dec
+        
+        echo "[*] Downloading and decrypting iBoot"
+        "$dir"/pzb -g "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1)" "$ipswurl"
+        "$dir"/gaster decrypt "$(awk "/""$model""/{x=1}x&&/iBoot[.]/{print;exit}" BuildManifest.plist | grep '<string>' | cut -d\> -f2 | cut -d\< -f1 | sed 's/Firmware[/]all_flash[/]//')" ibot.dec
+
+        echo "[*] Patching and signing iBSS/iBoot"
+        "$dir"/iBoot64Patcher iBSS.dec iBSS.patched
+        if [ "$semi_tethered" = "1" ]; then
+            if [ "$serial" = "1" ]; then
+                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "serial=3 rd=$fs" -l
+            else
+                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "-v rd=$fs" -l
+            fi
+        else
+            if [ "$serial" = "1" ]; then
+                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "serial=3" -f
+            else
+                "$dir"/iBoot64Patcher ibot.dec ibot.patched -b "-v" -f
+            fi
+        fi
+
+        if [ "$os" = 'Linux' ]; then
+            sed -i 's/\/\kernelcache/\/\kernelcachd/g' ibot.patched
+        else
+            LC_ALL=C sed -i.bak -e 's/s\/\kernelcache/s\/\kernelcachd/g' ibot.patched
+            rm *.bak
+        fi
+        cd ..
+        "$dir"/img4 -i work/iBSS.patched -o boot-"$deviceid"/iBSS.img4 -M blobs/"$deviceid"-"$version".der -A -T ibss
+        "$dir"/img4 -i work/ibot.patched -o boot-"$deviceid"/ibot.img4 -M blobs/"$deviceid"-"$version".der -A -T `if [[ "$cpid" == *"0x801"* ]]; then echo "ibss"; else echo "ibec"; fi`
+
+        touch boot-"$deviceid"/.local
+    fi
 fi
 
 # ============
@@ -870,48 +1145,61 @@ sleep 2
 _pwn
 _reset
 echo "[*] Booting device"
-if [[ "$cpid" == *"0x801"* ]]; then
+if [[ "$deviceid" == iPhone9,[1-4] ]] || [[ "$deviceid" == "iPhone10,"* ]]; then
     sleep 1
     "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
-    sleep 1
-else
-    sleep 1
-    "$dir"/irecovery -f boot-"$deviceid"/iBSS.img4
-    sleep 1
-    "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
-    sleep 1
-fi
-
-if [ -z "$semi_tethered" ]; then
+    sleep 3
+    "$dir"/irecovery -c "dorwx"
     sleep 2
-    "$dir"/irecovery -c fsboot
-fi
-
-if [ "$os" = 'Darwin' ]; then
-    defaults write -g ignore-devices -bool false
-    defaults write com.apple.AMPDevicesAgent dontAutomaticallySyncIPods -bool false
-    killall Finder
-fi
-
-cd logs
-for file in *.log; do 
-    if [[ "$file" != "SUCCESS_"* ]]; then 
-        if [ "$os" = 'Linux' ]; then
-            sudo mv "$file" SUCCESS_${file}
-        else
-            mv "$file" SUCCESS_${file}
-        fi
+    if [[ "$deviceid" == iPhone9,[1-4] ]]; then
+        "$dir"/irecovery -f other/payload/payload_t8010.bin
+    else
+        "$dir"/irecovery -f other/payload/payload_t8015.bin
     fi
-done
-cd ..
+    sleep 3
+    "$dir"/irecovery -c "go"
+    sleep 1
+    "$dir"/irecovery -c "go xargs $boot_args"
+    sleep 1
+    "$dir"/irecovery -c "go xfb"
+    sleep 1
+    "$dir"/irecovery -c "go boot $fs"
+else
+    if [[ "$cpid" == *"0x801"* ]]; then
+        sleep 1
+        "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
+    else
+        sleep 1
+        "$dir"/irecovery -f boot-"$deviceid"/iBSS.img4
+        sleep 4
+        "$dir"/irecovery -f boot-"$deviceid"/ibot.img4
+    fi
+
+    if [ -z "$semi_tethered" ]; then
+       sleep 2
+       "$dir"/irecovery -c fsboot
+    fi
+fi
+
+if [ -d "logs" ]; then
+    cd logs
+     mv "$log" SUCCESS_${log}
+    cd ..
+fi
 
 rm -rf work rdwork
 echo ""
 echo "Done!"
 echo "The device should now boot to iOS"
-echo "If this is your first time jailbreaking, open Tips app and then press Install"
-echo "Otherwise, open Tips app and press Do All in the Tools section"
-echo "If you have any issues, please join the Discord server and ask for help: https://dsc.gg/palera1n"
+echo "When you unlock the device, it will respring about 30 seconds after"
+echo "If this is your first time jailbreaking, open the new palera1n app, then press Install"
+echo "Otherwise, press Do All in the settings section of the app"
+echo "If you have any issues, please first check the COMMONISSUES.md document for common issues"
+if [ "$china" != "1" ]; then
+	echo "If that list doesn't solve your issue, join the Discord server and ask for help: https://dsc.gg/palera1n"
+fi
 echo "Enjoy!"
 
-} | tee logs/"$(date +%T)"-"$(date +%F)"-"$(uname)"-"$(uname -r)".log
+} 2>&1 | tee logs/${log}
+
+popd &> /dev/null
