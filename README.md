@@ -10,14 +10,14 @@ Only tested on tethered palera1n jailbreak, semi-tethered may need different mou
 
 This bypass will also jailbreak with palera1n, we do this to disable rootfs seal enforcement. This could be done without palera1n patching the kernel but I am too lazy to do that, and I want a JB anyways.
 
-iOS 16 support may be a thing when palera1n's iOS 16 branch gets somewhat stable, but I don't have a device to test
+iOS 16 support should be working now.
 
 # DISCLAIMER
 
 This bypass must not be used on a device you don't legally own and have permission to modify, I am not responsible for any misuse of anyting in this repo.
 
 # Usage
-To bypass Hello screen we will first of all, restore to a clean iOS 15.x version. (15.0-15.7.1)
+To bypass Hello screen we will first of all, restore to a clean iOS 15 or 16 version.
 
 You should be in the Hello screen for the version you restored, now reboot into DFU mode.
 
@@ -112,3 +112,4 @@ Mod credits:
 - @MatthewPierson: Patched mobileactivationd
 - @edwin170: Some code inspired from [dualboot-ios-15-with-14-script](https://github.com/edwin170/dualboot-ios-15-with-14-script/)'s repo
 - @kitty915: Modified palera1n script to automate bypass and added instructions in the readme
+- @afastaudir8: PR with updated palera1n code
